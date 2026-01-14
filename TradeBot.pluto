@@ -1,0 +1,293 @@
+local { crypto, http, json, scheduler, socket } = require "*"
+
+-- Load config
+if not io.exists("config.json") then
+	io.contents("config.json",
+[[{
+	"server_host": "127.0.0.1",
+	"hub_level": "TRADE_EU_EN_WIN_0", // Maroo's Bazaar (Europe, English, PC)
+	// "hub_level": "663E9BE9F741EEB5782F9DF0_0", // You can set `Featured: true` in MongoDB Compass to have a featured guild/clan. Note that the id must be uppercase here.
+	"trades": {
+		"Rifle Riven Mod (Veiled)": [ 10, 8 ], // Users can buy it for 10p and sell it for 8p.
+	},
+}]]
+)
+end
+local config = json.decode(io.contents("config.json"))
+
+-- Load data
+local item_name_to_type = {}
+for json.decode(io.contents("data/items.json")).data as item do
+	if item.gameRef ~= "" then
+		item_name_to_type[item.i18n.en.name] = item.gameRef
+	end
+end
+
+local buy_rates = {}
+for name, prices in config.trades do
+	if type := item_name_to_type[name] then
+		buy_rates[type] = prices[2]
+	else
+		print("Ignoring unknown item in config: " .. name)
+	end
+end
+
+-- Hub protocol stuff
+enum ClientMessageIds begin
+	CMSG_MOVE = 0,
+	CMSG_ZONE_PAIRS = 1,
+	CMSG_JOIN = 3,
+	CMSG_LEAVE = 4,
+	CMSG_HEARTBEAT = 5,
+	CMSG_CONTROL = 7,
+	CMSG_LOADOUT = 8,
+end
+
+enum ServerMessageIds begin
+	HMSG_MOVE = 0,
+	HMSG_ZONE_PAIRS = 1,
+	HMSG_PEER_INFO = 2,
+	HMSG_JOIN = 3,
+	HMSG_KICK = 4,
+	HMSG_HEARTBEAT = 5,
+	HMSG_CONTROL = 7,
+	HMSG_HIDE_PEER = 9,
+end
+
+local function pack_data(data)
+	data = string.pack("<I4s2", 0x80000000, data)
+
+	local initial = crypto.crc32c(data)
+	local chksum = crypto.crc32c("b471e49539930dc9b5a131e6247c7387G", initial)
+	data = string.pack(">I1I4", 0, chksum) .. data
+
+	--print("Out: " .. data:tohex())
+	return data
+end
+
+local function oml_prefix(str)
+	local prefix = ""
+	local v = #str
+	while true do
+		local byte = v & 0x7F
+		v >>= 7
+		if v == 0 then
+			prefix ..= string.pack("I1", byte)
+			break
+		end
+		prefix ..= string.pack("I1", byte | 0x80)
+	end
+	return prefix .. str
+end
+
+local s, irc, peerId, atExit
+local out_seqId = 0
+local function send_big_packet(data)
+	out_seqId += 1
+	s:send(pack_data(string.pack("<I1I2I4I1I4", 0xB8, peerId, out_seqId, 0x90, #data) .. data:sub(1, 0x493)))
+	local offset = 0x493
+	while offset ~= #data do
+		local remaining = #data - offset
+		local chunk_size = remaining > 0x493 ? 0x493 : remaining
+		out_seqId += 1
+		s:send(pack_data(string.pack("<I1I2I4I1I4", 0xB8, peerId, out_seqId, 0x90, 0) .. data:sub(1 + offset, offset + chunk_size)))
+		offset += chunk_size
+	end
+end
+
+-- Login to SpaceNinjaServer
+local loginResponse = json.decode(http.request("http://" .. config.server_host .. "/api/login.php?buildLabel=2025.10.29.12.05/IqeeHbWwzs0gP7IhLxExKg", {
+	body = json.encode({
+		email = "@TradeBot",
+		password = "TradeBot",
+		kick = true,
+	})
+}))
+local acctId = loginResponse.id
+local authz = "accountId=" .. acctId .. "&nonce=" .. loginResponse.Nonce
+
+-- Connect to hub
+s = socket.connect(config.server_host, 6952, "udp")
+if config.hub_level:startswith("TRADE_") then
+	s:send(pack_data(string.pack("<I1I1s1i2i2i2i1I1s1s1s1", 0xB4, CMSG_JOIN, acctId, 69, 187, -703, -20, 4, loginResponse.DisplayName .. utf8.char(0xE000), "", config.hub_level)))
+else
+	s:send(pack_data(string.pack("<I1I1s1i2i2i2i1I1s1s1s1", 0xB4, CMSG_JOIN, acctId, 0, 0, 0, 0, 0, loginResponse.DisplayName .. utf8.char(0xE000), "", config.hub_level)))
+end
+
+local sched = new scheduler()
+sched.errorfunc = function(e)
+	print(debug.traceback(e, 2))
+end
+sched:add(function()
+	local buffer_expected_size = 0
+	local buffer = ""
+	local acctId_to_name = {}
+	while msg := s:recv() do
+		--print("In: " .. msg:sub(1, 11):tohex() .. " " .. msg:sub(12):tohex())
+		local i = 12
+		if msg:byte(i) == 0xB8 then
+			i += 1
+			i += 2 -- peerId
+			local seqId
+			seqId, i = string.unpack("<I4", msg, i)
+			if msg:byte(i) == 0xC8 then
+				--print("Ack, ignoring")
+				continue
+			end
+			s:send(pack_data(string.pack("<I1I2I4I1", 0xB8, peerId, seqId, 0xC8))) -- Ack
+			if msg:byte(i) == 0x90 then
+				i += 1
+				local total_length
+				total_length, i = string.unpack("<I4", msg, i)
+				if total_length ~= 0 then
+					buffer_expected_size = total_length
+				end
+				buffer ..= msg:sub(i)
+				if #buffer < buffer_expected_size then
+					--print("To be continued")
+					continue
+				end
+				msg = buffer
+				i = 1
+				buffer_expected_size = 0
+				buffer = ""
+			else
+				i += 1 -- 0xCC
+			end
+		else
+			i += 1 -- 0xB4
+		end
+		local packet_id = msg:byte(i)
+		i += 1
+		switch packet_id do
+			case HMSG_JOIN:
+				peerId = string.unpack("<I2", msg, i)
+				print("Joined hub, was assigned peerId="..peerId)
+				send_big_packet(string.pack("<I1I2", CMSG_LOADOUT, peerId) .. oml_prefix[[{"a":{"a":"/Lotus/Powersuits/Excalibur/Excalibur","Skins":["0/Lotus/Upgrades/Skins/Excalibur/ExcaliburHelmet","1/Lotus/Upgrades/Skins/Armor/WarframeDefaults/EmptyCustomization","2/Lotus/Upgrades/Skins/Armor/WarframeDefaults/EmptyCustomization","5/Lotus/Upgrades/Skins/Excalibur/ExcaliburNobleAnims","6/Lotus/Upgrades/Skins/Armor/WarframeDefaults/EmptyCustomization","7/Lotus/Upgrades/Skins/Excalibur/ExcaliburSkin","8/Lotus/Upgrades/Skins/Armor/WarframeDefaults/EmptyCustomization","9/Lotus/Upgrades/Skins/Armor/WarframeDefaults/EmptyCustomization","10/Lotus/Upgrades/Skins/Armor/WarframeDefaults/EmptyCustomization","11/Lotus/Upgrades/Skins/Armor/WarframeDefaults/EmptyCustomization","15/Lotus/Upgrades/Skins/Excalibur/ExcaliburEffectsSetDefault","16/Lotus/Upgrades/Skins/Armor/WarframeDefaults/EmptyCustomization","26/Lotus/Upgrades/Skins/Voices/DefaultWarframeVoiceItem"]},"b":{"a":"/Lotus/Weapons/Tenno/Pistol/Pistol","Skins":["2/Lotus/Upgrades/Skins/HolsterCustomizations/PistolHipsR"]},"c":{"a":"/Lotus/Weapons/Tenno/Rifle/Rifle","Skins":["2/Lotus/Upgrades/Skins/HolsterCustomizations/RifleUpperBack"]},"d":{"a":"/Lotus/Weapons/Tenno/Melee/LongSword/LongSword","Skins":["2/Lotus/Upgrades/Skins/HolsterCustomizations/SwordUpperBack"]},"g":{"a":"/Lotus/Powersuits/Excalibur/DoomSword"},"ad":false,"o":{"Skins":["0/Lotus/Upgrades/Skins/Operator/Heads/MaleHeadA","1/Lotus/Upgrades/Skins/Operator/Bodies/MaleBody","5/Lotus/Upgrades/Skins/Operator/Hoods/HoodA","6/Lotus/Upgrades/Skins/Operator/BodySuits/BodySuitA","7/Lotus/Upgrades/Skins/Operator/Sleeves/SleevesA","8/Lotus/Upgrades/Skins/Operator/Leggings/LeggingsA","9/Lotus/Upgrades/Skins/Voices/OperatorVoiceAItem","10/Lotus/Upgrades/Skins/Operator/Skirts/NoSkirt","13/Lotus/Upgrades/Skins/Operator/Heads/MaleHeadA"]},"r":51,"syndicateLevelSimple":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],"gbt1":0,"gbt2":0,"gbt3":0,"sbt1":0,"sbt2":0,"sbt3":0,"i":{"ItemType":""},"t":999}]])
+				if config.hub_level:startswith("TRADE_") then
+					send_big_packet(string.pack("<I1I2", CMSG_CONTROL, peerId) .. oml_prefix[[{"status":{"o":0,"t":1,"m":[]}}]])
+				end
+				atExit = setmetatable({}, {
+					__gc = function()
+						s:send(pack_data(string.pack("<I1I1I2", 0xB4, CMSG_LEAVE, peerId)))
+					end
+				})
+				sched:add(function()
+					while true do
+						coroutine.sleep(30000)
+						s:send(pack_data(string.pack("<I1I1I2", 0xB4, CMSG_HEARTBEAT, peerId)))
+					end
+				end)
+				break
+
+			case HMSG_PEER_INFO:
+				do
+					i += 2 -- skip peerId
+					i += 7 -- skip position
+					local peer_name, peer_acctId
+					peer_name, peer_acctId, i = string.unpack("<s1s1", msg, i)
+					print("Got a peer: " .. peer_name .. " (" .. peer_acctId .. ")")
+					acctId_to_name[peer_acctId] = peer_name
+				end
+				break
+
+			case HMSG_CONTROL:
+				do
+					i += 2 -- skip sender peerId
+					repeat -- skip message length
+						i += 1
+					until (msg:byte(i - 1) & 0x80) == 0
+					print("Got control message: " .. msg:sub(i))
+
+					if data := json.decode(msg:sub(i)) then
+						if data.p2p == 1 then
+							if data.msg.f == 0 and data.msg.o == 0 then
+								-- Trade request
+								s:send(pack_data(string.pack("<I1I1I2", 0xB4, CMSG_CONTROL, peerId) .. oml_prefix(json.encode{ from = acctId, to = data.from, p2p = 1, msg = { f = 1, o = 1, c = 999999999 } })))
+								if irc and acctId_to_name[data.from] then
+									irc:send("PRIVMSG " .. acctId_to_name[data.from] .. " :Hello, if you want to sell something, just offer it. If you want to buy something, please tell me what first.\r\n")
+								end
+							elseif data.msg.f == 2 and data.msg.o == 10 then
+								-- Trade update (U40)
+								sched:add(function()
+									local { PendingTrades } = json.decode(http.request("http://" .. config.server_host .. "/api/trading.php?" .. authz .. "&buddyId=" .. data.from .. "&op=4"))
+									local platinumOffer = 0
+									local scamming = false
+									-- TODO: Make this configurable
+									if PendingTrades[1].Getting.RawUpgrades then
+										for PendingTrades[1].Getting.RawUpgrades as item do
+											if item.ItemType == "/Lotus/Upgrades/Mods/Randomized/RawRifleRandomMod" then
+												platinumOffer += 10 * item.ItemCount
+											else
+												scamming = true
+											end
+										end
+									end
+									if PendingTrades[1].Getting.RandomUpgrades or PendingTrades[1].Getting.Upgrades or PendingTrades[1].Getting.MiscItems or PendingTrades[1].Getting.Recipes or PendingTrades[1].Getting.FusionTreasures then
+										scamming = true
+									end
+									if platinumOffer ~= 0 and PendingTrades[1].Getting.PremiumCredits then
+										irc:send("PRIVMSG " .. acctId_to_name[data.from] .. " :Are you buying or selling?\r\n")
+									else
+										local need_to_update = (PendingTrades[1].Giving.PremiumCredits ~= platinumOffer)
+										if need_to_update then
+											if scamming then
+												irc?:send("PRIVMSG " .. acctId_to_name[data.from] .. " :At least one item in your trade has no associated platinum value. I'll gladly take such items if you don't mind getting nothing in return.\r\n")
+											end
+											PendingTrades = json.decode(http.request("http://" .. config.server_host .. "/api/trading.php?" .. authz .. "&buddyId=" .. data.from .. "&op=1", {
+												body = json.encode({
+													PremiumCredits = platinumOffer,
+													_SlotOrderInfo = { "P", "", "", "", "", "" }
+												})
+											})).PendingTrades
+										end
+										http.request("http://" .. config.server_host .. "/api/trading.php?" .. authz .. "&buddyId=" .. data.from .. "&op=6&revision=" .. PendingTrades[1].Revision) -- Ready
+										if need_to_update then
+											s:send(pack_data(string.pack("<I1I1I2", 0xB4, CMSG_CONTROL, peerId) .. oml_prefix(json.encode{ from = acctId, to = data.from, p2p = 1, msg = { f = 2, o = 10 } })))
+										elseif PendingTrades[1].BuddyReady then
+											http.request("http://" .. config.server_host .. "/api/trading.php?" .. authz .. "&buddyId=" .. data.from .. "&op=2&revision=" .. PendingTrades[1].Revision) -- Accept
+										end
+									end
+								end)
+							end
+						end
+					end
+				end
+				break
+		end
+	end
+end)
+
+-- Ensure account has infinite credits & platinum
+sched:add(function()
+	http.request("http://" .. config.server_host .. "/custom/setAccountCheat?" .. authz, {
+		headers = {
+			["Content-Type"] = "application/json",
+		},
+		body = json.encode({
+			key = "infiniteCredits",
+			value = true
+		})
+	})
+	http.request("http://" .. config.server_host .. "/custom/setAccountCheat?" .. authz, {
+		headers = {
+			["Content-Type"] = "application/json",
+		},
+		body = json.encode({
+			key = "infinitePlatinum",
+			value = true
+		})
+	})
+end)
+
+-- Connect to IRC
+sched:add(function()
+	irc = socket.connect(loginResponse.IRC[1], 6669)
+	irc:send("NICK " .. loginResponse.DisplayName .. utf8.char(0xE000) .. "\r\n")
+	irc:send("USER " .. acctId .. "_0 0 * nonce=" .. loginResponse.Nonce .. "\r\n")
+	while msg := irc:recv() do
+		print(msg:rstrip())
+	end
+end)
+
+sched:run()
