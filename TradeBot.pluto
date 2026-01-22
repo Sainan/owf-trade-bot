@@ -201,7 +201,11 @@ sched:add(function()
 
 					if data := json.decode(msg:sub(i)) then
 						if data.p2p == 1 then
-							if data.msg.f == 0 and data.msg.o == 0 then
+							if data.msg.o == 0
+								and (data.msg.f == 0 -- Trade Post
+									or data.msg.f == 3 -- Crimson Branch
+								)
+							then
 								-- Trade request
 								s:send(pack_data(string.pack("<I1I1I2", 0xB4, CMSG_CONTROL, peerId) .. oml_prefix(json.encode{ from = acctId, to = data.from, p2p = 1, msg = { f = 1, o = 1, c = 999999999 } })))
 								if irc and acctId_to_name[data.from] then
@@ -223,7 +227,7 @@ sched:add(function()
 											end
 										end
 									end
-									if PendingTrades[1].Getting.RandomUpgrades or PendingTrades[1].Getting.Upgrades or PendingTrades[1].Getting.MiscItems or PendingTrades[1].Getting.Recipes or PendingTrades[1].Getting.FusionTreasures then
+									if PendingTrades[1].Getting.RandomUpgrades or PendingTrades[1].Getting.Upgrades or PendingTrades[1].Getting.MiscItems or PendingTrades[1].Getting.Recipes or PendingTrades[1].Getting.FusionTreasures or PendingTrades[1].Getting.NemesisHistory then
 										scamming = true
 									end
 									if platinumOffer ~= 0 and PendingTrades[1].Getting.PremiumCredits then
