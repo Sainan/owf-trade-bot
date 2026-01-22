@@ -253,7 +253,7 @@ sched:add(function()
 											PendingTrades = json.decode(http.request("http://" .. config.server_host .. "/api/trading.php?" .. authz .. "&buddyId=" .. data.from .. "&op=1", {
 												body = json.encode({
 													PremiumCredits = platinumOffer,
-													_SlotOrderInfo = { "P", "", "", "", "", "" }
+													_SlotOrderInfo = { platinumOffer ~= 0 ? "P" : "", "", "", "", "", "" }
 												})
 											})).PendingTrades
 										end
