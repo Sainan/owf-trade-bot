@@ -258,23 +258,14 @@ sched:add(function()
 	end
 end)
 
--- Ensure account has infinite credits & platinum
+-- Ensure account will not be charged for trades
 sched:add(function()
 	http.request("http://" .. config.server_host .. "/custom/setAccountCheat?" .. authz, {
 		headers = {
 			["Content-Type"] = "application/json",
 		},
 		body = json.encode({
-			key = "infiniteCredits",
-			value = true
-		})
-	})
-	http.request("http://" .. config.server_host .. "/custom/setAccountCheat?" .. authz, {
-		headers = {
-			["Content-Type"] = "application/json",
-		},
-		body = json.encode({
-			key = "infinitePlatinum",
+			key = "tradesDontTouchInventory",
 			value = true
 		})
 	})
