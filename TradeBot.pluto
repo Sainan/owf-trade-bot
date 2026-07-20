@@ -334,6 +334,7 @@ sched:add(function()
 		local from, _to
 		from, _to, text = msg:match(":([^ ]+) PRIVMSG ([^ ]+) :(.+)")
 		if text then
+			from = from:split("!")[1]
 			local order = {
 				items = {},
 				price = 0,
