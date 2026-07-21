@@ -5,7 +5,7 @@ if not io.exists("config.json") then
 	io.contents("config.json",
 [[{
 	"server_host": "127.0.0.1",
-	"hub_level": "TRADE_EN_EN_WIN_0", // Maroo's Bazaar (Europe, English, PC)
+	"hub_level": "TRADE_EU_EN_WIN_0", // Maroo's Bazaar (Europe, English, PC)
 	// "hub_level": "663E9BE9F741EEB5782F9DF0_0", // You can set `Featured: true` in MongoDB Compass to have a featured guild/clan. Note that the id must be uppercase here.
 	"trades": {
 		// "Rifle Riven Mod (Veiled)": [ 10, 8 ], // Users can buy it for 10p and sell it for 8p.
@@ -15,28 +15,28 @@ if not io.exists("config.json") then
 end
 local config = json.decode(io.contents("config.json"))
 
--- Загружаем предметы и сгенерированные цены
+-- Load Itemlist and generated prices
 local item_name_to_type, generated_prices = dofile("item_data.lua")
 
+-- first goes generated prices,
+-- next overwrite from config.json (если есть)
 local sell_rates = {}
 local buy_rates = {}
 
--- Сначала используем сгенерированные цены для всех предметов
 for name, prices in pairs(generated_prices) do
-    if type := item_name_to_type[name] then
-        sell_rates[type] = prices[1]
-        buy_rates[type] = prices[2]
-    end
+	if type := item_name_to_type[name] then
+		sell_rates[type] = prices[1]
+		buy_rates[type] = prices[2]
+	end
 end
 
--- Затем переопределяем цены из config.json (если они есть)
 for name, prices in pairs(config.trades or {}) do
-    if type := item_name_to_type[name] then
-        sell_rates[type] = prices[1]
-        buy_rates[type] = prices[2]
-    else
-        print("Ignoring unknown item in config: " .. name)
-    end
+	if type := item_name_to_type[name] then
+		sell_rates[type] = prices[1]
+		buy_rates[type] = prices[2]
+	else
+		print("Ignoring unknown item in config: " .. name)
+	end
 end
 
 -- Store what users want to buy (will be obtained from IRC)
@@ -240,94 +240,76 @@ sched:add(function()
 								-- Trade update (U40)
 								sched:add(function()
 									local { PendingTrades } = json.decode(http.request("http://" .. config.server_host .. "/api/trading.php?" .. authz .. "&buddyId=" .. data.from .. "&op=4"), json.withorder)
-									        print("=== DEBUG: Trade Window Content ===")
-        if PendingTrades[1].Getting then
-            for category, items in pairs(PendingTrades[1].Getting) do
-                if type(items) == "table" then
-                    print(string.format("  Category: %s", category))
-                    for i, item in ipairs(items) do
-                        print(string.format("    [%d] ItemType: %s, Count: %s", i, item.ItemType, item.ItemCount))
-                    end
-                else
-                    print(string.format("  Category: %s -> %s", category, tostring(items)))
-                end
-            end
-        else
-            print("  No items in Getting")
-        end
-        print("=== END DEBUG ===")
-        -- ===========================================
-        
-        local offer = {
-            __order = { "RawUpgrades", "Recipes", "MiscItems", "FusionTreasures", "NemesisHistory", "PremiumCredits", "_SlotOrderInfo" },
-            _SlotOrderInfo = { "", "", "", "", "", "" }
-        }
 
-local scamming = false
+									-- Build offer based on what the other player put into the trade window
+									local offer = {
+										__order = { "RawUpgrades", "Recipes", "MiscItems", "FusionTreasures", "NemesisHistory", "PremiumCredits", "_SlotOrderInfo" },
+										_SlotOrderInfo = { "", "", "", "", "", "" }
+									}
+									local scamming = false
 
--- Универсальная обработка для всех категорий
-local categories_to_buy = {
-    { name = "RawUpgrades", tag = "P" },
-    { name = "Recipes", tag = "R" },
-    { name = "MiscItems", tag = "M" },
-    { name = "FusionTreasures", tag = "F" },
-    { name = "NemesisHistory", tag = "N" },
-}
+									-- Handle all supported categories
+									local categories_to_buy = {
+										{ name = "RawUpgrades", tag = "P" },
+										{ name = "Recipes", tag = "R" },
+										{ name = "MiscItems", tag = "M" },
+										{ name = "FusionTreasures", tag = "F" },
+										{ name = "NemesisHistory", tag = "N" },
+									}
 
-for _, cat in pairs(categories_to_buy) do
-    if PendingTrades[1].Getting[cat.name] then
-        for PendingTrades[1].Getting[cat.name] as item do
-            if buy_rate := buy_rates[item.ItemType] then
-                offer.PremiumCredits ??= 0
-                offer.PremiumCredits += buy_rate * item.ItemCount
-                add_to_slot_order_info(offer, cat.tag)
-            else
-                scamming = true
-            end
-        end
-    end
-end
+									for _, cat in pairs(categories_to_buy) do
+										if PendingTrades[1].Getting[cat.name] then
+											for PendingTrades[1].Getting[cat.name] as item do
+												if buy_rate := buy_rates[item.ItemType] then
+													offer.PremiumCredits ??= 0
+													offer.PremiumCredits += buy_rate * item.ItemCount
+													add_to_slot_order_info(offer, cat.tag)
+												else
+													scamming = true
+												end
+											end
+										end
+									end
 
--- Проверка на категории, которые бот не умеет обрабатывать
-if PendingTrades[1].Getting.RandomUpgrades or PendingTrades[1].Getting.Upgrades then
-    scamming = true
-end
+									-- These categories are not yet supported
+									if PendingTrades[1].Getting.RandomUpgrades or PendingTrades[1].Getting.Upgrades then
+										scamming = true
+									end
+
+									-- If the other player put platinum, fulfill their order (if any)
 									if PendingTrades[1].Getting.PremiumCredits then
-    if offer.PremiumCredits then
-        irc:send("PRIVMSG " .. acctId_to_name[data.from] .. " :Are you buying or selling?\r\n")
-        return
-    end
-    if name := acctId_to_name[data.from] then
-        if order := name_to_order[name] then
-            if PendingTrades[1].Getting.PremiumCredits >= order.price then
-                for order.items as itemType do
-                    -- Определяем категорию предмета по его gameRef
-                    if string.find(itemType, "/Lotus/Types/Recipes/") then
-                        -- Это чертеж - кладем в Recipes
-                        offer.Recipes ??= {}
-                        offer.Recipes:insert({ ItemType = itemType, ItemCount = 1 })
-                        add_to_slot_order_info(offer, "R")
-                    elseif string.find(itemType, "/Lotus/Types/Items/MiscItems/") then
-                        -- Это ресурсы/ключи - кладем в MiscItems
-                        offer.MiscItems ??= {}
-                        offer.MiscItems:insert({ ItemType = itemType, ItemCount = 1 })
-                        add_to_slot_order_info(offer, "M")
-                    elseif string.find(itemType, "/Lotus/Types/Items/FusionTreasures/") then
-                        -- Это аятаны - кладем в FusionTreasures
-                        offer.FusionTreasures ??= {}
-                        offer.FusionTreasures:insert({ ItemType = itemType, ItemCount = 1 })
-                        add_to_slot_order_info(offer, "F")
-                    else
-                        -- Остальное - в RawUpgrades
-                        offer.RawUpgrades ??= {}
-                        offer.RawUpgrades:insert({ ItemType = itemType, ItemCount = 1 })
-                        add_to_slot_order_info(offer, itemType)
-                    end
-                end
-            end
-        end
-    end
-end
+										if offer.PremiumCredits then
+											irc:send("PRIVMSG " .. acctId_to_name[data.from] .. " :Are you buying or selling?\r\n")
+											return
+										end
+										if name := acctId_to_name[data.from] then
+											if order := name_to_order[name] then
+												if PendingTrades[1].Getting.PremiumCredits >= order.price then
+													for order.items as itemType do
+														-- Determine the right category based on itemType
+														if string.find(itemType, "/Lotus/Types/Recipes/") then
+															offer.Recipes ??= {}
+															offer.Recipes:insert({ ItemType = itemType, ItemCount = 1 })
+															add_to_slot_order_info(offer, "R")
+														elseif string.find(itemType, "/Lotus/Types/Items/MiscItems/") then
+															offer.MiscItems ??= {}
+															offer.MiscItems:insert({ ItemType = itemType, ItemCount = 1 })
+															add_to_slot_order_info(offer, "M")
+														elseif string.find(itemType, "/Lotus/Types/Items/FusionTreasures/") then
+															offer.FusionTreasures ??= {}
+															offer.FusionTreasures:insert({ ItemType = itemType, ItemCount = 1 })
+															add_to_slot_order_info(offer, "F")
+														else
+															offer.RawUpgrades ??= {}
+															offer.RawUpgrades:insert({ ItemType = itemType, ItemCount = 1 })
+															add_to_slot_order_info(offer, itemType)
+														end
+													end
+												end
+											end
+										end
+									end
+
 									local giving = json.encode(offer)
 									local need_to_update = (json.encode(PendingTrades[1].Giving) ~= giving)
 									if need_to_update then
@@ -378,14 +360,13 @@ sched:add(function()
 		local from, _to
 		from, _to, text = msg:match(":([^ ]+) PRIVMSG ([^ ]+) :(.+)")
 		if text then
-			-- Извлекаем чистый никнейм (без !ident@host)
 			local clean_from = from:match("^([^!]+)") or from
 			local order = {
 				items = {},
 				price = 0,
 			}
 			for match in msg:gmatch('"([^"]+)"') do
-				-- Проверяем, есть ли указание количества (например, "Arcane Aegis x5")
+				-- Support quantity suffix (e.g. "Arcane Aegis x5")
 				local item_name, count = match:match("^(.-)%s*x(%d+)$")
 				if not item_name then
 					item_name = match
