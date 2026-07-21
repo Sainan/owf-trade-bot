@@ -15,11 +15,11 @@ if not io.exists("config.json") then
 end
 local config = json.decode(io.contents("config.json"))
 
--- Load Itemlist and generated prices
+-- Loading external itemlist and pricelist
 local item_name_to_type, generated_prices = dofile("item_data.lua")
 
--- first goes generated prices,
--- next overwrite from config.json (если есть)
+-- First Generated Prices,
+-- Then owerwrite from config.json (если есть)
 local sell_rates = {}
 local buy_rates = {}
 
