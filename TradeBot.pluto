@@ -83,11 +83,11 @@ end
 local name_to_order = {}
 
 -- Trade helpers
-local function add_to_slot_order_info(offer, t)
+local function add_platinum_slot(offer)
 	local oi = offer._SlotOrderInfo
 	for i = 1, 6 do
-		if oi[i] == "" or oi[i] == t then
-			oi[i] = t
+		if oi[i] == "" or oi[i] == "P" then
+			oi[i] = "P"
 			break
 		end
 	end
@@ -290,7 +290,7 @@ sched:add(function()
 											if buy_rate := buy_rates[item.ItemType] then
 												offer.PremiumCredits ??= 0
 												offer.PremiumCredits += buy_rate * item.ItemCount
-												add_to_slot_order_info(offer, "P")
+												add_platinum_slot(offer)
 											else
 												buy_scamming = true
 											end
@@ -301,7 +301,7 @@ sched:add(function()
 											if buy_rate := buy_rates[item.ItemType] then
 												offer.PremiumCredits ??= 0
 												offer.PremiumCredits += buy_rate * item.ItemCount
-												add_to_slot_order_info(offer, "P")
+												add_platinum_slot(offer)
 											else
 												buy_scamming = true
 											end
@@ -312,7 +312,7 @@ sched:add(function()
 											if buy_rate := buy_rates[item.ItemType] then
 												offer.PremiumCredits ??= 0
 												offer.PremiumCredits += buy_rate * item.ItemCount
-												add_to_slot_order_info(offer, "P")
+												add_platinum_slot(offer)
 											else
 												buy_scamming = true
 											end
@@ -334,7 +334,7 @@ sched:add(function()
 														print(itemType .. " hopefully belongs in " .. bin)
 														offer[bin] ??= {}
 														offer[bin]:insert({ ItemType = itemType, ItemCount = 1 })
-														add_to_slot_order_info(offer, itemType)
+														offer._SlotOrderInfo:insert(itemType)
 													end
 													if PendingTrades[1].Getting.PremiumCredits > order.price then
 														irc?:send("PRIVMSG " .. acctId_to_name[data.from] .. " :You're offering "..(PendingTrades[1].Getting.PremiumCredits - order.price)..":platinum: too much. I'll gladly accept your donation, of course.\r\n")
