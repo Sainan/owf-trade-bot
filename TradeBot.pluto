@@ -395,11 +395,21 @@ sched:add(function()
 				items = {},
 				price = 0,
 			}
-			for match in msg:gmatch('"(.+)"') do
+			for _match in msg:gmatch('"(.+)"') do
+				local match = _match
+				local amount = match:match("(%d+)x .+")
+				if amount then
+					match = match:sub(#amount + 3)
+					amount = tonumber(amount)
+				else
+					amount = 1
+				end
 				if type := name_to_item_type(match) then
 					if sell_rate := sell_rates[type] then
-						order.items:insert(type)
-						order.price += sell_rate
+						for i = 1, amount do
+							order.items:insert(type)
+						end
+						order.price += sell_rate * amount
 					else
 						irc:send("PRIVMSG "..from.." :I don't sell \""..match.."\"\r\n")
 					end
@@ -407,10 +417,19 @@ sched:add(function()
 					irc:send("PRIVMSG "..from.." :I don't know what \""..match.."\" is\r\n")
 				end
 			end
-			if #order.items ~= 0 then
-				irc:send("PRIVMSG "..from.." :I understand there's "..#order.items.." item(s) you'd like to buy. The total cost will be "..order.price..":platinum:.\r\n")
+			if #order.items > 6 then
+				irc:send("PRIVMSG "..from.." :I can't sell more than 6 items at once.\r\n")
+			else
+				if #order.items ~= 0 then
+					local out = "PRIVMSG "..from.." :I understand there's "..#order.items.." item"
+					if #order.items ~= 1 then
+						out ..= "s"
+					end
+					out ..= " you'd like to buy. The total cost will be "..order.price..":platinum:.\r\n"
+					irc:send(out)
+				end
+				name_to_order[from] = order
 			end
-			name_to_order[from] = order
 		end
 	end
 end)
