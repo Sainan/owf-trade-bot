@@ -398,7 +398,7 @@ sched:add(function()
 				items = {},
 				price = 0,
 			}
-			for _match in msg:gmatch('"(.+)"') do
+			for _match in msg:gmatch('"(.-)"') do
 				local match = _match
 				local amount = match:match("(%d+)x .+")
 				if amount then
