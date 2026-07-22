@@ -1,1 +1,0 @@
-items.json is populated from https://api.warframe.market/v2/items

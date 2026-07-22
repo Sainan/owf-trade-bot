@@ -1,0 +1,18 @@
+local { http, json } = require "*"
+
+local local_versions = io.contents("versions.json") or "{}"
+local remote_versions = json.decode(http.request("https://api.warframe.market/v2/versions"), json.withorder)
+
+if local_versions.data?.collections?.items ~= remote_versions.data.collections.items then
+	local items = json.decode(http.request("https://api.warframe.market/v2/items"), json.withorder)
+	for i, item in items.data do
+		if "set" in item.tags then
+			print("Expanding " .. item.slug .. " ...")
+			items.data[i] = json.decode(http.request("https://api.warframe.market/v2/items/" .. item.slug), json.withorder).data
+		end
+	end
+	io.contents("items.json", json.encode(items))
+	io.contents("items.pretty.json", json.encode(items, true))
+end
+
+io.contents("versions.json", json.encode(remote_versions, true))
