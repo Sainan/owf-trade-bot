@@ -6,7 +6,7 @@ if not io.exists("config.json") then
 [[{
 	"server_host": "127.0.0.1",
 	"hub_level": "TRADE_EU_EN_WIN_0", // Maroo's Bazaar (Europe, English, PC)
-	// "hub_level": "663E9BE9F741EEB5782F9DF0_0", // You can set `Featured: true` in MongoDB Compass to have a featured guild/clan. Note that the id must be uppercase here.
+	// "hub_level": "663E9BE9F741EEB5782F9DF0_0", // Note that the guild/clan id must be uppercase here.
 	"trades": {
 		"Rifle Riven Mod (Veiled)": [ 10, 8 ], // Users can buy it for 10p and sell it for 8p.
 	},
