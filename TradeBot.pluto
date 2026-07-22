@@ -9,8 +9,23 @@ if not io.exists("config.json") then
 	// "hub_level": "663E9BE9F741EEB5782F9DF0_0", // Note that the guild/clan id must be uppercase here.
 	"trades": {
 		"Rifle Riven Mod (Veiled)": [ 10, 8 ], // Users can buy it for 10p and sell it for 8p.
+		"Arcane Energize (rank 0)": [ 6, 3 ],
 	},
 }]]
+	-- TODO: Handle 'Upgrades', e.g. "Arcane Energize (rank 5)": [ 100, 75 ],
+	--[[{
+		["ItemType"] = "/Lotus/Upgrades/CosmeticEnhancers/Utility/GolemArcaneRadialEnergyOnEnergyPickup",
+		["PendingRerollFingerprint"] = "",
+		["ItemCount"] = 1,
+		["LastAdded"] = {
+			["$oid"] = "000000000000000000000000",
+		},
+		["UpgradeFingerprint"] = string(9) "{\"lvl\":5}",
+		["FromSKU"] = false,
+		["ItemId"] = {
+			["$oid"] = "6702a618b45674559eedc9a7", -- TODO: Generate a proper oid
+		},
+	},]]
 )
 end
 local config = json.decode(io.contents("config.json"))
@@ -35,10 +50,14 @@ for json.decode(io.contents("data/items.json")).data as item do
 	end
 end
 
+local function name_to_item_type(name)
+	return item_name_to_type[name:replace(" (rank 0)", "")] -- (rank 0) just specifies ProductCategory=RawUpgrades explicitly, but doesn't change what the item is
+end
+
 local sell_rates = {}
 local buy_rates = {}
 for name, prices in config.trades do
-	if type := item_name_to_type[name] then
+	if type := name_to_item_type(name) then
 		sell_rates[type] = prices[1]
 		buy_rates[type] = prices[2]
 	else
@@ -340,7 +359,7 @@ sched:add(function()
 				price = 0,
 			}
 			for match in msg:gmatch('"(.+)"') do
-				if type := item_name_to_type[match] then
+				if type := name_to_item_type(match) then
 					if sell_rate := sell_rates[type] then
 						order.items:insert(type)
 						order.price += sell_rate
