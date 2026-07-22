@@ -284,7 +284,7 @@ sched:add(function()
 										__order = { --[["RandomUpgrades", "Upgrades",]] "RawUpgrades", "MiscItems", "Recipes", --[["FusionTreasures", "NemesisHistory",]] "PremiumCredits", "_SlotOrderInfo" },
 										_SlotOrderInfo = { "", "", "", "", "", "" }
 									}
-									local scamming = false
+									local buy_scamming = false
 									if PendingTrades[1].Getting.RawUpgrades then
 										for PendingTrades[1].Getting.RawUpgrades as item do
 											if buy_rate := buy_rates[item.ItemType] then
@@ -292,7 +292,7 @@ sched:add(function()
 												offer.PremiumCredits += buy_rate * item.ItemCount
 												add_to_slot_order_info(offer, "P")
 											else
-												scamming = true
+												buy_scamming = true
 											end
 										end
 									end
@@ -303,7 +303,7 @@ sched:add(function()
 												offer.PremiumCredits += buy_rate * item.ItemCount
 												add_to_slot_order_info(offer, "P")
 											else
-												scamming = true
+												buy_scamming = true
 											end
 										end
 									end
@@ -314,12 +314,12 @@ sched:add(function()
 												offer.PremiumCredits += buy_rate * item.ItemCount
 												add_to_slot_order_info(offer, "P")
 											else
-												scamming = true
+												buy_scamming = true
 											end
 										end
 									end
 									if PendingTrades[1].Getting.RandomUpgrades or PendingTrades[1].Getting.Upgrades or PendingTrades[1].Getting.FusionTreasures or PendingTrades[1].Getting.NemesisHistory then
-										scamming = true
+										buy_scamming = true
 									end
 									if PendingTrades[1].Getting.PremiumCredits then
 										if offer.PremiumCredits then
@@ -336,6 +336,9 @@ sched:add(function()
 														offer[bin]:insert({ ItemType = itemType, ItemCount = 1 })
 														add_to_slot_order_info(offer, itemType)
 													end
+													if PendingTrades[1].Getting.PremiumCredits > order.price then
+														irc?:send("PRIVMSG " .. acctId_to_name[data.from] .. " :You're offering "..(PendingTrades[1].Getting.PremiumCredits - order.price)..":platinum: too much. I'll gladly accept your donation, of course.\r\n")
+													end
 												end
 											end
 										end
@@ -343,7 +346,7 @@ sched:add(function()
 									local giving = json.encode(offer)
 									local need_to_update = (json.encode(PendingTrades[1].Giving) ~= giving)
 									if need_to_update then
-										if scamming then
+										if buy_scamming then
 											irc?:send("PRIVMSG " .. acctId_to_name[data.from] .. " :At least one item in your trade has no associated platinum value. I'll gladly take such items if you don't mind getting nothing in return.\r\n")
 										end
 										PendingTrades = json.decode(http.request("http://" .. config.server_host .. "/api/trading.php?" .. authz .. "&buddyId=" .. data.from .. "&op=1", {
