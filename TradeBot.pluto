@@ -10,6 +10,8 @@ if not io.exists("config.json") then
 	"trades": {
 		"Rifle Riven Mod (Veiled)": [ 10, 8 ], // Users can buy it for 10p and sell it for 8p.
 		"Arcane Energize (rank 0)": [ 6, 3 ],
+		"Cetus Scene": [ 35, 12 ],
+		"Ember Prime Blueprint": [ 25, 20 ],
 	},
 }]]
 	-- TODO: Handle 'Upgrades', e.g. "Arcane Energize (rank 5)": [ 100, 75 ],
@@ -52,6 +54,18 @@ end
 
 local function name_to_item_type(name)
 	return item_name_to_type[name:replace(" (rank 0)", "")] -- (rank 0) just specifies ProductCategory=RawUpgrades explicitly, but doesn't change what the item is
+end
+
+local function item_type_to_category(path)
+	if path:startswith("/Lotus/Upgrades/") then
+		return "RawUpgrades"
+	end
+	if path:startswith("/Lotus/Types/Recipes/") then
+		return "Recipes"
+	end
+	if path:startswith("/Lotus/Types/Items/MiscItems/") then
+		return "MiscItems"
+	end
 end
 
 local sell_rates = {}
@@ -267,11 +281,10 @@ sched:add(function()
 								sched:add(function()
 									local { PendingTrades } = json.decode(http.request("http://" .. config.server_host .. "/api/trading.php?" .. authz .. "&buddyId=" .. data.from .. "&op=4"), json.withorder)
 									local offer = {
-										__order = { --[["RandomUpgrades", "Upgrades",]] "RawUpgrades", --[["MiscItems", "Recipes", "FusionTreasures", "NemesisHistory",]] "PremiumCredits", "_SlotOrderInfo" },
+										__order = { --[["RandomUpgrades", "Upgrades",]] "RawUpgrades", "MiscItems", "Recipes", --[["FusionTreasures", "NemesisHistory",]] "PremiumCredits", "_SlotOrderInfo" },
 										_SlotOrderInfo = { "", "", "", "", "", "" }
 									}
 									local scamming = false
-									-- TODO: Handle more categories
 									if PendingTrades[1].Getting.RawUpgrades then
 										for PendingTrades[1].Getting.RawUpgrades as item do
 											if buy_rate := buy_rates[item.ItemType] then
@@ -283,7 +296,29 @@ sched:add(function()
 											end
 										end
 									end
-									if PendingTrades[1].Getting.RandomUpgrades or PendingTrades[1].Getting.Upgrades or PendingTrades[1].Getting.MiscItems or PendingTrades[1].Getting.Recipes or PendingTrades[1].Getting.FusionTreasures or PendingTrades[1].Getting.NemesisHistory then
+									if PendingTrades[1].Getting.MiscItems then
+										for PendingTrades[1].Getting.MiscItems as item do
+											if buy_rate := buy_rates[item.ItemType] then
+												offer.PremiumCredits ??= 0
+												offer.PremiumCredits += buy_rate * item.ItemCount
+												add_to_slot_order_info(offer, "P")
+											else
+												scamming = true
+											end
+										end
+									end
+									if PendingTrades[1].Getting.Recipes then
+										for PendingTrades[1].Getting.Recipes as item do
+											if buy_rate := buy_rates[item.ItemType] then
+												offer.PremiumCredits ??= 0
+												offer.PremiumCredits += buy_rate * item.ItemCount
+												add_to_slot_order_info(offer, "P")
+											else
+												scamming = true
+											end
+										end
+									end
+									if PendingTrades[1].Getting.RandomUpgrades or PendingTrades[1].Getting.Upgrades or PendingTrades[1].Getting.FusionTreasures or PendingTrades[1].Getting.NemesisHistory then
 										scamming = true
 									end
 									if PendingTrades[1].Getting.PremiumCredits then
@@ -295,8 +330,10 @@ sched:add(function()
 											if order := name_to_order[name] then
 												if PendingTrades[1].Getting.PremiumCredits >= order.price then
 													for order.items as itemType do
-														offer.RawUpgrades ??= {}
-														offer.RawUpgrades:insert({ ItemType = itemType, ItemCount = 1 })
+														local bin = item_type_to_category(itemType)
+														print(itemType .. " hopefully belongs in " .. bin)
+														offer[bin] ??= {}
+														offer[bin]:insert({ ItemType = itemType, ItemCount = 1 })
 														add_to_slot_order_info(offer, itemType)
 													end
 												end
