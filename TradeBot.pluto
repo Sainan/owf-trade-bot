@@ -10,25 +10,12 @@ if not io.exists("config.json") then
 	"trades": {
 		"Rifle Riven Mod (Veiled)": [ 10, 8 ], // Users can buy it for 10p and sell it for 8p.
 		"Arcane Energize (rank 0)": [ 6, 3 ],
+		"Arcane Energize (rank 5)": [ 100, 75 ],
 		"Cetus Scene": [ 35, 12 ],
 		"Ember Prime Set": [ 65, 55 ],
 		"Ember Prime Blueprint": [ 25, 20 ],
 	},
 }]]
-	-- TODO: Handle 'Upgrades', e.g. "Arcane Energize (rank 5)": [ 100, 75 ],
-	--[[{
-		["ItemType"] = "/Lotus/Upgrades/CosmeticEnhancers/Utility/GolemArcaneRadialEnergyOnEnergyPickup",
-		["PendingRerollFingerprint"] = "",
-		["ItemCount"] = 1,
-		["LastAdded"] = {
-			["$oid"] = "000000000000000000000000",
-		},
-		["UpgradeFingerprint"] = string(9) "{\"lvl\":5}",
-		["FromSKU"] = false,
-		["ItemId"] = {
-			["$oid"] = "6702a618b45674559eedc9a7", -- TODO: Generate a proper oid
-		},
-	},]]
 )
 end
 local config = json.decode(io.contents("config.json"))
@@ -70,9 +57,22 @@ do
 	end
 end
 
-local function name_to_item_type(name)
-	return item_name_to_type[name:replace(" (rank 0)", "")] -- (rank 0) just specifies ProductCategory=RawUpgrades explicitly, but doesn't change what the item is
+local function name_to_item_type(_name)
+	local [name, rank] = _name:split(" (rank ")
+	local type = item_name_to_type[name]
+	if rank then
+		rank = tonumber(rank:rstrip(")"))
+		if rank ~= 0 then -- (rank 0) just specifies ProductCategory=RawUpgrades explicitly, but doesn't change what the item is
+			type ..= ":" .. json.encode{ lvl = rank }
+		end
+	end
+	return type
 end
+assert(name_to_item_type("Ember Prime Set") == [[/Lotus/Types/Recipes/WarframeRecipes/EmberPrimeBlueprint,/Lotus/Types/Recipes/WarframeRecipes/EmberPrimeChassisBlueprint,/Lotus/Types/Recipes/WarframeRecipes/EmberPrimeHelmetBlueprint,/Lotus/Types/Recipes/WarframeRecipes/EmberPrimeSystemsBlueprint]])
+assert(name_to_item_type("Arcane Energize (rank 0)") == [[/Lotus/Upgrades/CosmeticEnhancers/Utility/GolemArcaneRadialEnergyOnEnergyPickup]])
+assert(name_to_item_type("Arcane Energize (rank 5)") == [[/Lotus/Upgrades/CosmeticEnhancers/Utility/GolemArcaneRadialEnergyOnEnergyPickup:{"lvl":5}]])
+
+local generate_oid = || -> string.format("%08x%08x%08x", os.unixseconds() & 0xffffffff, crypto.random(0, 0xffffffff), crypto.random(0, 0xffffffff))
 
 local function item_type_to_category(path)
 	if path:startswith("/Lotus/Upgrades/") then
@@ -101,11 +101,21 @@ end
 local name_to_order = {}
 
 -- Trade helpers
-local function add_platinum_slot(offer)
+local function ensure_platinum_slot(offer)
 	local oi = offer._SlotOrderInfo
 	for i = 1, 6 do
 		if oi[i] == "" or oi[i] == "P" then
 			oi[i] = "P"
+			break
+		end
+	end
+end
+
+local function add_order_slot(offer, value)
+	local oi = offer._SlotOrderInfo
+	for i = 1, 6 do
+		if oi[i] == "" then
+			oi[i] = value
 			break
 		end
 	end
@@ -298,8 +308,9 @@ sched:add(function()
 								-- Trade update (U40)
 								sched:add(function()
 									local { PendingTrades } = json.decode(http.request("http://" .. config.server_host .. "/api/trading.php?" .. authz .. "&buddyId=" .. data.from .. "&op=4"), json.withorder)
+									--print(json.encode(PendingTrades, true))
 									local offer = {
-										__order = { --[["RandomUpgrades", "Upgrades",]] "RawUpgrades", "MiscItems", "Recipes", --[["FusionTreasures", "NemesisHistory",]] "PremiumCredits", "_SlotOrderInfo" },
+										__order = { --[["RandomUpgrades",]] "Upgrades", "RawUpgrades", "MiscItems", "Recipes", --[["FusionTreasures", "NemesisHistory",]] "PremiumCredits", "_SlotOrderInfo" },
 										_SlotOrderInfo = { "", "", "", "", "", "" }
 									}
 									local buy_scamming = false
@@ -308,7 +319,7 @@ sched:add(function()
 											if buy_rate := buy_rates[item.ItemType] then
 												offer.PremiumCredits ??= 0
 												offer.PremiumCredits += buy_rate * item.ItemCount
-												add_platinum_slot(offer)
+												ensure_platinum_slot(offer)
 											else
 												buy_scamming = true
 											end
@@ -319,7 +330,7 @@ sched:add(function()
 											if buy_rate := buy_rates[item.ItemType] then
 												offer.PremiumCredits ??= 0
 												offer.PremiumCredits += buy_rate * item.ItemCount
-												add_platinum_slot(offer)
+												ensure_platinum_slot(offer)
 											else
 												buy_scamming = true
 											end
@@ -330,13 +341,24 @@ sched:add(function()
 											if buy_rate := buy_rates[item.ItemType] then
 												offer.PremiumCredits ??= 0
 												offer.PremiumCredits += buy_rate * item.ItemCount
-												add_platinum_slot(offer)
+												ensure_platinum_slot(offer)
 											else
 												buy_scamming = true
 											end
 										end
 									end
-									if PendingTrades[1].Getting.RandomUpgrades or PendingTrades[1].Getting.Upgrades or PendingTrades[1].Getting.FusionTreasures or PendingTrades[1].Getting.NemesisHistory then
+									if PendingTrades[1].Getting.Upgrades then
+										for PendingTrades[1].Getting.Upgrades as item do
+											if buy_rate := buy_rates[item.ItemType..":"..item.UpgradeFingerprint] then
+												offer.PremiumCredits ??= 0
+												offer.PremiumCredits += buy_rate * item.ItemCount
+												ensure_platinum_slot(offer)
+											else
+												buy_scamming = true
+											end
+										end
+									end
+									if PendingTrades[1].Getting.RandomUpgrades or PendingTrades[1].Getting.FusionTreasures or PendingTrades[1].Getting.NemesisHistory then
 										buy_scamming = true
 									end
 									if PendingTrades[1].Getting.PremiumCredits then
@@ -348,11 +370,32 @@ sched:add(function()
 											if order := name_to_order[name] then
 												if PendingTrades[1].Getting.PremiumCredits >= order.price then
 													for order.items as itemType do
-														local bin = item_type_to_category(itemType)
-														print(itemType .. " hopefully belongs in " .. bin)
-														offer[bin] ??= {}
-														offer[bin]:insert({ ItemType = itemType, ItemCount = 1 })
-														offer._SlotOrderInfo:insert(itemType)
+														if ":" in itemType then
+															local [type, fp] = itemType:split(":", 2)
+															local oid = generate_oid()
+															offer.Upgrades ??= {}
+															offer.Upgrades:insert({
+																["ItemType"] = type,
+																["PendingRerollFingerprint"] = "",
+																["ItemCount"] = 1,
+																["LastAdded"] = {
+																	["$oid"] = "000000000000000000000000",
+																},
+																["UpgradeFingerprint"] = fp,
+																["FromSKU"] = false,
+																["ItemId"] = {
+																	["$oid"] = oid
+																},
+															})
+															add_order_slot(offer, type)
+														else
+															local bin = item_type_to_category(itemType)
+															print(itemType .. " hopefully belongs in " .. bin)
+															offer[bin] ??= {}
+															offer[bin]:insert({ ItemType = itemType, ItemCount = 1 })
+															add_order_slot(offer, itemType)
+														end
+														--print(json.encode(offer, true))
 													end
 													if PendingTrades[1].Getting.PremiumCredits > order.price then
 														irc?:send("PRIVMSG " .. acctId_to_name[data.from] .. " :You're offering "..(PendingTrades[1].Getting.PremiumCredits - order.price)..":platinum: too much. I'll gladly accept your donation, of course.\r\n")
