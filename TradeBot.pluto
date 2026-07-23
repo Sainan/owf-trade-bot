@@ -11,6 +11,7 @@ if not io.exists("config.json") then
 		"Rifle Riven Mod (Veiled)": [ 10, 8 ], // Users can buy it for 10p and sell it for 8p.
 		"Arcane Energize (rank 0)": [ 6, 3 ],
 		"Cetus Scene": [ 35, 12 ],
+		"Ember Prime Set": [ 65, 55 ],
 		"Ember Prime Blueprint": [ 25, 20 ],
 	},
 }]]
@@ -44,11 +45,28 @@ local item_name_to_type = {
 	["Kitgun Riven Mod (Veiled)"] = "/Lotus/Upgrades/Mods/Randomized/RawModularPistolRandomMod",
 	["Sentinel Weapon Riven Mod (Veiled)"] = "/Lotus/Upgrades/Mods/Randomized/RawSentinelWeaponRandomMod",
 }
-for json.decode(io.contents("data/items.json")).data as item do
-	if item.gameRef ~= ""
-		and not item_name_to_type[item.i18n.en.name] -- Respect the manually-entered data
-	then
-		item_name_to_type[item.i18n.en.name] = item.gameRef
+do
+	local items = json.decode(io.contents("data/items.json")).data
+
+	local wfmid_to_type = {}
+	for items as item do
+		wfmid_to_type[item.id] = item.gameRef
+	end
+
+	for items as item do
+		if item.setRoot then
+			local types = {}
+			for item.setParts as partId do
+				if partId ~= item.id then
+					types:insert(wfmid_to_type[partId])
+				end
+			end
+			item_name_to_type[item.i18n.en.name] = types:concat(",")
+		elseif item.gameRef ~= ""
+			and not item_name_to_type[item.i18n.en.name] -- Respect the manually-entered data
+		then
+			item_name_to_type[item.i18n.en.name] = item.gameRef
+		end
 	end
 end
 
@@ -403,14 +421,16 @@ sched:add(function()
 				local amount = match:match("(%d+)x .+")
 				if amount then
 					match = match:sub(#amount + 3)
-					amount = tonumber(amount)
+					amount = math.min(tonumber(amount), 7)
 				else
 					amount = 1
 				end
 				if type := name_to_item_type(match) then
 					if sell_rate := sell_rates[type] then
 						for i = 1, amount do
-							order.items:insert(type)
+							for type:split(",") as itemType do
+								order.items:insert(itemType)
+							end
 						end
 						order.price += sell_rate * amount
 					else
